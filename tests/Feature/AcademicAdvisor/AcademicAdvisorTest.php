@@ -16,7 +16,6 @@ use App\Models\Nilai;
 use App\Models\TahunAkademik;
 use App\Services\AcademicAdvisor\AdvisorContextBuilder;
 use App\Services\AcademicAdvisor\AdvisorGuards;
-use App\Services\AiAdvisorService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 class AcademicAdvisorTest extends TestCase
@@ -28,6 +27,7 @@ class AcademicAdvisorTest extends TestCase
     protected Mahasiswa $mahasiswa;
     protected TahunAkademik $activeTahunAkademik;
     protected Dosen $dosen;
+    protected Prodi $prodi;
 
     protected function setUp(): void
     {
@@ -43,15 +43,21 @@ class AcademicAdvisorTest extends TestCase
     protected function setupTestData(): void
     {
         // Create fakultas and prodi
-        $fakultas = Fakultas::create(['nama' => 'Fakultas Teknik']);
-        $prodi = Prodi::create([
+        $fakultas = Fakultas::create([
+            'nama' => 'Fakultas Teknik',
+            'kode' => 'FT',
+        ]);
+
+        $this->prodi = Prodi::create([
             'fakultas_id' => $fakultas->id,
             'nama' => 'Sistem Informasi',
+            'kode' => 'SI',
+            'jenjang' => 'S1',
         ]);
 
         // Create dosen
         $dosenUser = User::create([
-            'name' => 'Test Dosen',
+            'name' => 'Dr. Test Dosen',
             'email' => 'dosen@test.com',
             'password' => bcrypt('password'),
             'role' => 'dosen',
@@ -60,7 +66,8 @@ class AcademicAdvisorTest extends TestCase
         $this->dosen = Dosen::create([
             'user_id' => $dosenUser->id,
             'nidn' => '1234567890',
-            'prodi_id' => $prodi->id,
+            'nama' => 'Dr. Test Dosen',
+            'prodi_id' => $this->prodi->id,
         ]);
 
         // Create user and mahasiswa
@@ -74,9 +81,11 @@ class AcademicAdvisorTest extends TestCase
         $this->mahasiswa = Mahasiswa::create([
             'user_id' => $user->id,
             'nim' => '2303113649',
-            'prodi_id' => $prodi->id,
+            'nama' => 'Test Mahasiswa',
+            'prodi_id' => $this->prodi->id,
             'angkatan' => 2023,
             'status' => 'aktif',
+            'dosen_wali_id' => $this->dosen->id,
         ]);
 
         // Create active tahun akademik
@@ -84,10 +93,47 @@ class AcademicAdvisorTest extends TestCase
             'tahun' => '2024/2025',
             'semester' => 'Ganjil',
             'is_active' => true,
+            'tanggal_mulai' => now()->subMonths(2),
+            'tanggal_selesai' => now()->addMonths(4),
         ]);
+
+        // Create curriculum courses including Big Data
+        $this->createCurriculumCourses();
 
         // Create some completed courses (LULUS) - total 87 SKS
         $this->createCompletedCourses(87);
+    }
+
+    protected function createCurriculumCourses(): void
+    {
+        // Create Big Data course in semester 7 (available in curriculum)
+        MataKuliah::create([
+            'kode_mk' => 'SI701',
+            'nama_mk' => 'Big Data',
+            'sks' => 3,
+            'semester' => 7,
+            'prodi_id' => $this->prodi->id,
+            'is_wajib' => false,
+        ]);
+
+        // Create some other curriculum courses
+        MataKuliah::create([
+            'kode_mk' => 'SI702',
+            'nama_mk' => 'Data Mining',
+            'sks' => 3,
+            'semester' => 7,
+            'prodi_id' => $this->prodi->id,
+            'is_wajib' => false,
+        ]);
+
+        MataKuliah::create([
+            'kode_mk' => 'SI801',
+            'nama_mk' => 'Skripsi',
+            'sks' => 6,
+            'semester' => 8,
+            'prodi_id' => $this->prodi->id,
+            'is_wajib' => true,
+        ]);
     }
 
     protected function createCompletedCourses(int $targetSks): void
@@ -104,25 +150,32 @@ class AcademicAdvisorTest extends TestCase
                 'nama_mk' => 'Mata Kuliah ' . $courseNum,
                 'sks' => $sks,
                 'semester' => $semesterNum,
+                'prodi_id' => $this->prodi->id,
+                'is_wajib' => true,
             ]);
 
             $tahunAkademik = TahunAkademik::create([
                 'tahun' => '2023/2024',
                 'semester' => $semesterNum % 2 == 1 ? 'Ganjil' : 'Genap',
                 'is_active' => false,
+                'tanggal_mulai' => now()->subYear(),
+                'tanggal_selesai' => now()->subMonths(6),
             ]);
 
             $krs = Krs::create([
                 'mahasiswa_id' => $this->mahasiswa->id,
                 'tahun_akademik_id' => $tahunAkademik->id,
                 'status' => 'approved',
+                'total_sks' => $sks,
             ]);
 
             $kelas = Kelas::create([
                 'mata_kuliah_id' => $mk->id,
                 'dosen_id' => $this->dosen->id,
                 'nama_kelas' => 'Kelas A',
+                'tahun_akademik_id' => $tahunAkademik->id,
                 'kapasitas' => 40,
+                'terisi' => 1,
             ]);
 
             KrsDetail::create([
@@ -133,9 +186,11 @@ class AcademicAdvisorTest extends TestCase
             Nilai::create([
                 'mahasiswa_id' => $this->mahasiswa->id,
                 'kelas_id' => $kelas->id,
-                'nilai_angka' => 85,
+                'mata_kuliah_id' => $mk->id,
+                'nilai_angka' => 85.5,
                 'nilai_huruf' => 'A',
-                'status' => 'final',
+                'bobot' => 4.0,
+                'status' => 'LULUS',
             ]);
 
             $sksCreated += $sks;
@@ -161,7 +216,7 @@ class AcademicAdvisorTest extends TestCase
         $this->assertEquals(87, $progress['sks_lulus']);
         $this->assertEquals(144, $progress['sks_target']);
         $this->assertEquals(57, $progress['sks_remaining']);
-        $this->assertEqualsWithDelta(60.4, $progress['progress_percent'], 0.5);
+        $this->assertEqualsWithDelta(60.42, $progress['progress_percent'], 0.5);
 
         // Verify prodi rules loaded correctly
         $this->assertEquals(144, $context['prodi_rules']['graduation_total_sks']);
@@ -192,20 +247,27 @@ class AcademicAdvisorTest extends TestCase
     {
         $context = $this->contextBuilder->build($this->mahasiswa);
 
+        // Verify Big Data exists in database
+        $bigDataFromDb = MataKuliah::where('nama_mk', 'Big Data')->first();
+        $this->assertNotNull($bigDataFromDb, 'Big Data should exist in database');
+
         // Search for Big Data in course statuses
         $bigDataCourse = $this->contextBuilder->findCourseByName($context, 'Big Data');
 
-        $this->assertNotNull($bigDataCourse);
-        $this->assertEquals('Big Data', $bigDataCourse['nama']);
+        $this->assertNotNull($bigDataCourse, 'Big Data should be found in context');
+        $this->assertStringContainsString('Big Data', $bigDataCourse['nama']);
         $this->assertEquals(7, $bigDataCourse['semester']);
         $this->assertEquals('TERSEDIA_DI_KURIKULUM', $bigDataCourse['status']);
 
-        // Also verify it's in curriculum
+        // Also verify it's in curriculum array
+        $this->assertArrayHasKey('curriculum', $context);
+        
         $semester7 = collect($context['curriculum'])->firstWhere('semester', 7);
-        $this->assertNotNull($semester7);
+        $this->assertNotNull($semester7, 'Semester 7 should exist in curriculum');
 
-        $bigDataInCurriculum = collect($semester7['mata_kuliah'])->firstWhere('nama', 'Big Data');
-        $this->assertNotNull($bigDataInCurriculum);
+        $bigDataInCurriculum = collect($semester7['mata_kuliah'])
+            ->first(fn($mk) => str_contains($mk['nama'], 'Big Data'));
+        $this->assertNotNull($bigDataInCurriculum, 'Big Data should be in semester 7 curriculum');
         $this->assertEquals(3, $bigDataInCurriculum['sks']);
     }
 
@@ -222,19 +284,24 @@ class AcademicAdvisorTest extends TestCase
             'nama_mk' => 'Course Without Attendance',
             'sks' => 3,
             'semester' => 5,
+            'prodi_id' => $this->prodi->id,
+            'is_wajib' => true,
         ]);
 
         $enrolledKelas = Kelas::create([
             'mata_kuliah_id' => $enrolledMk->id,
             'dosen_id' => $this->dosen->id,
             'nama_kelas' => 'Kelas No Attendance',
+            'tahun_akademik_id' => $this->activeTahunAkademik->id,
             'kapasitas' => 40,
+            'terisi' => 1,
         ]);
 
         $activeKrs = Krs::create([
             'mahasiswa_id' => $this->mahasiswa->id,
             'tahun_akademik_id' => $this->activeTahunAkademik->id,
             'status' => 'approved',
+            'total_sks' => 3,
         ]);
 
         KrsDetail::create([
@@ -306,19 +373,24 @@ class AcademicAdvisorTest extends TestCase
             'nama_mk' => 'Enrolled Course',
             'sks' => 3,
             'semester' => 5,
+            'prodi_id' => $this->prodi->id,
+            'is_wajib' => true,
         ]);
 
         $enrolledKelas = Kelas::create([
             'mata_kuliah_id' => $enrolledMk->id,
             'dosen_id' => $this->dosen->id,
             'nama_kelas' => 'Kelas Enrolled',
+            'tahun_akademik_id' => $this->activeTahunAkademik->id,
             'kapasitas' => 40,
+            'terisi' => 1,
         ]);
 
         $activeKrs = Krs::create([
             'mahasiswa_id' => $this->mahasiswa->id,
             'tahun_akademik_id' => $this->activeTahunAkademik->id,
             'status' => 'approved',
+            'total_sks' => 3,
         ]);
 
         KrsDetail::create([
@@ -333,21 +405,23 @@ class AcademicAdvisorTest extends TestCase
 
         // Check LULUS courses (from our setUp)
         $completedCourses = $statuses->where('status', 'LULUS');
-        $this->assertGreaterThan(0, $completedCourses->count());
+        $this->assertGreaterThan(0, $completedCourses->count(), 'Should have completed courses');
 
         // Check SEDANG_DIAMBIL course
         $enrolledCourse = $statuses->firstWhere('kode', 'ENROLLED01');
         $this->assertNotNull($enrolledCourse, 'Enrolled course should exist in statuses');
         $this->assertEquals('SEDANG_DIAMBIL', $enrolledCourse['status']);
 
-        // Check TERSEDIA_DI_KURIKULUM (from config)
+        // Check TERSEDIA_DI_KURIKULUM (courses not yet taken)
+        // Big Data should be available since we created it but haven't enrolled
         $availableCourses = $statuses->where('status', 'TERSEDIA_DI_KURIKULUM');
-        $this->assertGreaterThan(0, $availableCourses->count());
+        $this->assertGreaterThan(0, $availableCourses->count(), 'Should have available courses from curriculum');
 
-        // Specifically check Big Data is available
+        // Specifically check Big Data is available (not completed, not enrolled)
         $bigData = $statuses->first(fn($c) => str_contains($c['nama'], 'Big Data'));
-        $this->assertNotNull($bigData);
+        $this->assertNotNull($bigData, 'Big Data should exist in course statuses');
         $this->assertEquals('TERSEDIA_DI_KURIKULUM', $bigData['status']);
+        $this->assertEquals(7, $bigData['semester']);
     }
 
     /**

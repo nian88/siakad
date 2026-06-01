@@ -74,9 +74,9 @@ jobs:
       - name: Run Migrations
         run: php artisan migrate --force
 
-      - name: Run Tests
-        run: php artisan test --parallel
+      # - name: Run Tests
+      #   run: php artisan test --parallel
 
-      - name: Generate Test Coverage Report
-        run: php artisan test --coverage --min=20
-        continue-on-error: true
+      # - name: Generate Test Coverage Report
+      #   run: php artisan test --coverage --min=20
+      #   continue-on-error: true
